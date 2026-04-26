@@ -1,53 +1,91 @@
-"""Synthetic task generator for one simulated day."""
+"""Synthetic daily task generation for the scheduling prototype.
+
+Generated tasks are small dictionaries consumed directly by ADHDSchedulingEnv.
+The generator intentionally mixes urgent, high-value, short tasks with broader
+random tasks so training episodes have varied deadline pressure and reward
+trade-offs.
+"""
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
+
+from config import (
+    MAX_PRIORITY, MAX_TASKS, MAX_TASK_DURATION,
+    MIN_TASKS, MIN_TASK_DURATION, NUM_SLOTS,
+)
 
 
 def generate_task_set(
-    num_tasks: int,
-    num_slots: int,
-    rng: np.random.Generator,
+    num_tasks: int | None = None,
+    num_slots: int = NUM_SLOTS,
+    rng: Any | None = None,
 ) -> list[dict]:
-    """Generate a list of num_tasks dicts for one episode.
+    """Generate one synthetic day of tasks.
 
-    Each task:
-        id, difficulty∈[0,1], priority∈{1,2,3}, duration∈{1,2,3},
-        deadline∈[duration, num_slots-1], remaining=duration, done=False
+    The first task is biased toward being moderately urgent and meaningful so
+    each day contains at least one clear scheduling target. Remaining tasks are
+    sampled from broader distributions, then sorted by deadline, priority, and
+    id to produce a stable order for the environment's task-index actions.
 
-    Diversity guarantees (post-sampling corrections):
-        - At least one task with deadline <= num_slots // 2  (early deadline)
-        - At least one task with priority == 3               (urgent)
+    Args:
+        num_tasks: Number of tasks to generate. If None, samples MIN_TASKS–MAX_TASKS.
+        num_slots: Number of available scheduling slots in the day.
+        rng: Numpy random generator. If None, a new default generator is used.
+
+    Returns:
+        List of task dicts: {id, difficulty, priority, duration, deadline,
+        remaining, done}.
+
+    Raises:
+        ValueError: If num_tasks is outside configured bounds or num_slots <= 0.
     """
-    tasks = []
-    for i in range(num_tasks):
-        difficulty = float(rng.uniform(0.0, 1.0))
-        priority = int(rng.choice([1, 2, 3], p=[0.2, 0.5, 0.3]))
-        duration = int(rng.choice([1, 2, 3]))
-        # Deadline must be reachable: deadline >= duration (so task can complete)
-        deadline = int(rng.integers(duration, num_slots))
+    rng = np.random.default_rng() if rng is None else rng
+    if num_tasks is None:
+        num_tasks = int(rng.integers(MIN_TASKS, MAX_TASKS + 1))
+    if not MIN_TASKS <= num_tasks <= MAX_TASKS:
+        raise ValueError(f"num_tasks must be between {MIN_TASKS} and {MAX_TASKS}")
+    if num_slots <= 0:
+        raise ValueError("num_slots must be positive")
+
+    tasks: list[dict] = []
+    for task_id in range(num_tasks):
+        if task_id == 0:
+            # Forced "anchor" task: moderately urgent, meaningful, completable early.
+            difficulty = float(rng.uniform(0.35, 0.70))
+            priority = int(rng.choice([2, MAX_PRIORITY], p=[0.65, 0.35]))
+            duration = int(rng.integers(1, min(MAX_TASK_DURATION, 2) + 1))
+            deadline = int(rng.integers(
+                max(2, num_slots // 4),
+                max(3, num_slots // 2) + 1,
+            ))
+        else:
+            # Remaining tasks: bell-shaped difficulty, mixed urgency spread.
+            difficulty = float(rng.beta(2.0, 2.0))
+            priority = int(rng.choice([1, 2, MAX_PRIORITY], p=[0.35, 0.40, 0.25]))
+            duration = int(rng.integers(MIN_TASK_DURATION, MAX_TASK_DURATION + 1))
+            if task_id % 2 == 0:
+                # Late deadline
+                deadline = int(rng.integers(max(1, num_slots // 3), num_slots))
+            else:
+                # Early deadline
+                deadline = int(rng.integers(0, max(1, (2 * num_slots) // 3)))
+
         tasks.append({
-            "id": i,
-            "difficulty": round(difficulty, 4),
+            "id": task_id,
+            "difficulty": round(float(np.clip(difficulty, 0.0, 1.0)), 3),
             "priority": priority,
             "duration": duration,
-            "deadline": deadline,
+            "deadline": int(np.clip(deadline, 0, num_slots - 1)),
             "remaining": duration,
             "done": False,
         })
 
-    # --- Diversity corrections ---
-    # Ensure at least one early deadline
-    half = num_slots // 2
-    if not any(t["deadline"] <= half for t in tasks):
-        idx = int(rng.integers(0, num_tasks))
-        t = tasks[idx]
-        t["deadline"] = int(rng.integers(t["duration"], half + 1))
-
-    # Ensure at least one urgent (priority 3) task
-    if not any(t["priority"] == 3 for t in tasks):
-        idx = int(rng.integers(0, num_tasks))
-        tasks[idx]["priority"] = 3
+    # Sort for stable ordering: earliest deadline first, then highest priority.
+    tasks.sort(key=lambda t: (t["deadline"], -t["priority"], t["id"]))
+    for new_id, task in enumerate(tasks):
+        task["id"] = new_id
 
     return tasks
