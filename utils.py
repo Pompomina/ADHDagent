@@ -1,11 +1,12 @@
-"""Shared utilities: math helpers, seeding, recording, plotting."""
+"""Shared utilities: math helpers, seeding, recording, plotting, eval helpers."""
 
 from __future__ import annotations
 
 import math
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -260,5 +261,141 @@ def plot_task_completion_summary(
 # File system
 # ---------------------------------------------------------------------------
 
-def ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
+def ensure_dir(path: str | Path) -> Path:
+    directory = Path(path)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+# ---------------------------------------------------------------------------
+# Evaluation helpers (ported from hanzhewu/adhd-scheduling util.py)
+# ---------------------------------------------------------------------------
+
+_MPL_CACHE_DIR = Path("/tmp") / "adhd_scheduling_matplotlib"
+_MPL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", str(_MPL_CACHE_DIR))
+
+POLICY_DISPLAY_NAMES: dict[str, str] = {
+    "random": "Random",
+    "edf": "EDF",
+    "energy_aware": "Energy-Aware",
+    "ppo": "PPO",
+}
+
+
+def display_policy_name(policy_name: str) -> str:
+    """Return a presentation-friendly policy label."""
+    return POLICY_DISPLAY_NAMES.get(policy_name, policy_name.replace("_", " ").title())
+
+
+def get_pyplot():
+    """Import Matplotlib in headless Agg mode with a writable cache directory."""
+    import matplotlib
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as _plt
+    return _plt
+
+
+def generate_eval_task_sets(
+    num_episodes: int,
+    seed: int = 42,
+) -> list[list[dict[str, Any]]]:
+    """Generate reproducible task sets for multi-episode evaluation.
+
+    Args:
+        num_episodes: Number of simulated days to sample.
+        seed: Random seed for task generation.
+
+    Returns:
+        List of one task set per episode.
+    """
+    if num_episodes <= 0:
+        raise ValueError("num_episodes must be positive")
+    from task_generator import generate_task_set
+    rng = np.random.default_rng(seed)
+    return [generate_task_set(rng=rng) for _ in range(num_episodes)]
+
+
+def is_urgent_task(task: dict[str, Any], num_slots: int = 16) -> bool:
+    """Return True if a task's deadline falls in the first third of the day."""
+    urgent_cutoff = max(1, num_slots // 3)
+    return int(task["deadline"]) <= urgent_cutoff
+
+
+def rollout_metrics(result: dict, num_slots: int = 16) -> dict[str, float | str]:
+    """Compute evaluation metrics from one rollout result dict.
+
+    Requires 'completed_task_id' to be present in trajectory rows for accurate
+    urgent_completion_rate; otherwise urgent rate will be 0.
+
+    Returns:
+        Flat metric dict: policy, total_reward, completed_value, completed_tasks,
+        urgent_completion_rate, rest_actions, missed_deadlines, invalid_actions,
+        work_actions, total_actions.
+    """
+    final_tasks = result["final_tasks"]
+    completion_slots: dict[int, int] = {
+        int(row["completed_task_id"]): int(row["slot"])
+        for row in result["trajectory"]
+        if row.get("completed_task_id") is not None
+    }
+    urgent_tasks = [t for t in final_tasks if is_urgent_task(t, num_slots=num_slots)]
+    urgent_completed = sum(
+        1
+        for t in urgent_tasks
+        if int(t["id"]) in completion_slots
+        and completion_slots[int(t["id"])] <= int(t["deadline"])
+    )
+    urgent_rate = urgent_completed / len(urgent_tasks) if urgent_tasks else 0.0
+
+    trajectory = result["trajectory"]
+    invalid_actions = sum(1 for row in trajectory if row.get("invalid_action", False))
+    rest_actions = sum(1 for row in trajectory if row["action_label"] == "REST")
+    work_actions = len(trajectory) - rest_actions - invalid_actions
+
+    return {
+        "policy": str(result["policy"]),
+        "total_reward": float(result["total_reward"]),
+        "completed_value": float(result["completed_value"]),
+        "completed_tasks": float(result["completed_tasks"]),
+        "urgent_completion_rate": float(urgent_rate),
+        "rest_actions": float(result["rest_actions"]),
+        "missed_deadlines": float(result["missed_deadline_count"]),
+        "invalid_actions": float(invalid_actions),
+        "work_actions": float(work_actions),
+        "total_actions": float(len(trajectory)),
+    }
+
+
+def load_policy_suite(
+    include_ppo: bool = True,
+    model_path: str | Path = "models/ppo_scheduler.zip",
+) -> tuple[list[Any], str | None]:
+    """Load heuristic baselines and optionally append trained PPO.
+
+    Returns:
+        (policies, skipped_message). skipped_message is None when PPO was
+        loaded or not requested.
+    """
+    from baselines import make_baseline_policies
+    from train import load_trained_policy
+
+    policies: list[Any] = list(make_baseline_policies())
+    if not include_ppo:
+        return policies, None
+    try:
+        policies.append(load_trained_policy(model_path=model_path, deterministic=True))
+    except Exception as exc:
+        return policies, f"PPO skipped: {exc}"
+    return policies, None
+
+
+def print_task_set(tasks: list[dict[str, Any]]) -> None:
+    """Print a compact human-readable task list."""
+    for task in tasks:
+        urgency = "urgent" if is_urgent_task(task) else "normal"
+        print(
+            f"  T{task['id']}: priority={task['priority']} "
+            f"difficulty={task['difficulty']:.2f} duration={task['duration']} "
+            f"deadline={task['deadline']} {urgency}"
+        )

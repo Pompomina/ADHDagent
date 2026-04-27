@@ -40,7 +40,7 @@ REST_FOCUS_RECOVERY: float = 0.18
 
 # Reward coefficients
 REWARD_TASK_COMPLETE_MULT: float = 2.0   # multiplied by priority
-REWARD_MISSED_DEADLINE: float = -1.0    # once per task
+REWARD_MISSED_DEADLINE: float = -1.5    # once per task
 REWARD_STREAK_PENALTY: float = -0.5
 REWARD_STREAK_THRESHOLD: int = 3
 REWARD_REST_LOW_ENERGY: float = 0.2
@@ -61,13 +61,17 @@ EA_DEADLINE_WEIGHT: float = 0.1
 PPO_TRAIN_STEPS: int = 100_000
 PPO_LEARNING_RATE: float = 3e-4
 PPO_GAMMA: float = 0.98
+PPO_POLICY: str = "MlpPolicy"
+PPO_N_STEPS: int = 512        # smaller than SB3 default 2048; better credit assignment for ~12-step episodes
+PPO_VERBOSE: int = 1
 
 # Evaluation
-EVAL_EPISODES: int = 200
+EVAL_EPISODES: int = 300
 
 # Paths
 MODEL_PATH: str = "models/ppo_scheduler.zip"
 FIGURES_DIR: str = "report_figures"
+RESULTS_DIR: str = "results"
 EXPERIMENTS_DIR: str = "experiments"
 
 # Seeds

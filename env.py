@@ -65,6 +65,7 @@ class ADHDSchedulingEnv(gym.Env):
         self._init_seed = seed
         self._rng = make_rng(seed)
         self.rest_action = REST_ACTION      # instance attr for baseline compat
+        self.num_slots = NUM_SLOTS          # instance attr for evaluate.py/demo.py
 
         self.fixed_tasks = deepcopy(tasks) if tasks is not None else None
 

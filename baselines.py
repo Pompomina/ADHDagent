@@ -188,6 +188,7 @@ def rollout_policy(env, policy, seed: int | None = None) -> dict:
             "invalid_action": invalid,
             "task_success": bool(info.get("task_success", False)),
             "missed_deadlines": list(info.get("missed_deadlines", [])),
+            "completed_task_id": info.get("completed_task_id"),
         })
         obs = next_obs
         done = bool(terminated or truncated)

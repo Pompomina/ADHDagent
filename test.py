@@ -11,6 +11,8 @@ from config import DEFAULT_SEED, MAX_TASKS, MAX_TASK_DURATION, MIN_TASKS, NUM_SL
 from env import ADHDSchedulingEnv
 from task_generator import generate_task_set
 from train import load_trained_model, load_trained_policy, make_training_env
+from evaluate import evaluate_policies, summarize_metrics
+from demo import run_sample_day
 
 
 def validate_phase1_contract(seed: int = DEFAULT_SEED) -> None:
@@ -177,9 +179,28 @@ def run_policy_rollouts(seed: int = DEFAULT_SEED) -> None:
         print_policy_rollout(rollout_policy(ppo_env, ppo_policy, seed=seed))
 
 
+def validate_phase4_evaluation_and_demo(seed: int = DEFAULT_SEED) -> None:
+    """Fast 2-episode evaluation and demo smoke check."""
+    rows, _ = evaluate_policies(num_episodes=2, seed=seed, include_ppo=False)
+    assert len(rows) >= 2 * 3, f"expected ≥6 rows, got {len(rows)}"
+    summaries = summarize_metrics(rows)
+    assert len(summaries) == 3
+    for s in summaries:
+        assert "avg_total_reward" in s
+        assert "avg_urgent_completion_rate" in s
+        assert float(s["avg_urgent_completion_rate"]) >= 0.0
+
+    tasks, results, _ = run_sample_day(seed=seed, include_ppo=False)
+    assert len(tasks) >= MIN_TASKS
+    assert len(results) == 3
+
+    print("validate_phase4_evaluation_and_demo: PASS")
+
+
 if __name__ == "__main__":
     validate_phase1_contract()
     validate_phase2_baselines()
     validate_phase3_training_interface()
+    validate_phase4_evaluation_and_demo()
     run_random_rollout()
     run_policy_rollouts()
